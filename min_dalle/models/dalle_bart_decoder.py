@@ -11,7 +11,7 @@ class DecoderCrossAttention(AttentionBase):
         self,
         decoder_state: FloatTensor,
         encoder_state: FloatTensor,
-        attention_mask: BoolTensor
+        attention_mask: BoolTensor,
     ) -> FloatTensor:
         keys = self.k_proj.forward(encoder_state)
         values = self.v_proj.forward(encoder_state)
@@ -24,16 +24,16 @@ class DecoderSelfAttention(AttentionBase):
         super().__init__(head_count, embed_count)
 
     def forward(
-        self, 
+        self,
         decoder_state: FloatTensor,
         attention_state: FloatTensor,
         attention_mask: BoolTensor,
-        token_index: LongTensor
+        token_index: LongTensor,
     ) -> Tuple[FloatTensor, FloatTensor]:
         keys = self.k_proj.forward(decoder_state)
         values = self.v_proj.forward(decoder_state)
         queries = self.q_proj.forward(decoder_state)
-        
+
         token_count = token_index.shape[1]
         if token_count == 1:
             batch_count = decoder_state.shape[0]
@@ -48,11 +48,7 @@ class DecoderSelfAttention(AttentionBase):
 
 class DecoderLayer(nn.Module):
     def __init__(
-        self, 
-        head_count: int, 
-        embed_count: int,
-        glu_embed_count: int,
-        device: str
+        self, head_count: int, embed_count: int, glu_embed_count: int, device: str
     ):
         super().__init__()
         self.pre_self_attn_layer_norm = nn.LayerNorm(embed_count)
@@ -64,14 +60,13 @@ class DecoderLayer(nn.Module):
         self.glu = GLU(embed_count, glu_embed_count)
         self.token_indices = torch.arange(IMAGE_TOKEN_COUNT, device=device)
 
-
     def forward(
         self,
         decoder_state: FloatTensor,
         encoder_state: FloatTensor,
         attention_state: FloatTensor,
         attention_mask: BoolTensor,
-        token_index: LongTensor
+        token_index: LongTensor,
     ) -> Tuple[FloatTensor, FloatTensor]:
         # Self Attention
         token_count = token_index.shape[1]
@@ -80,18 +75,17 @@ class DecoderLayer(nn.Module):
             self_attn_mask = self_attn_mask[:, None, None, :]
         else:
             self_attn_mask = (
-                self.token_indices[None, None, :token_count] <= 
-                token_index[:, :, None]
+                self.token_indices[None, None, :token_count] <= token_index[:, :, None]
             )
             self_attn_mask = self_attn_mask[:, None, :, :]
-        
+
         residual = decoder_state
         decoder_state = self.pre_self_attn_layer_norm.forward(decoder_state)
         decoder_state, attention_state = self.self_attn.forward(
             decoder_state=decoder_state,
             attention_state=attention_state,
             attention_mask=self_attn_mask,
-            token_index=token_index
+            token_index=token_index,
         )
         decoder_state = self.self_attn_layer_norm.forward(decoder_state)
         decoder_state = residual + decoder_state
@@ -102,7 +96,7 @@ class DecoderLayer(nn.Module):
         decoder_state = self.encoder_attn.forward(
             decoder_state=decoder_state,
             encoder_state=encoder_state,
-            attention_mask=attention_mask
+            attention_mask=attention_mask,
         )
         decoder_state = self.encoder_attn_layer_norm.forward(decoder_state)
         decoder_state = residual + decoder_state
@@ -123,7 +117,7 @@ class DalleBartDecoder(nn.Module):
         attention_head_count: int,
         glu_embed_count: int,
         layer_count: int,
-        device: str
+        device: str,
     ):
         super().__init__()
         self.layer_count = layer_count
@@ -131,20 +125,21 @@ class DalleBartDecoder(nn.Module):
         self.image_vocab_count = image_vocab_count
         self.embed_tokens = nn.Embedding(image_vocab_count + 1, embed_count)
         self.embed_positions = nn.Embedding(IMAGE_TOKEN_COUNT, embed_count)
-        self.layers: List[DecoderLayer] = nn.ModuleList([
-            DecoderLayer(
-                head_count=attention_head_count,
-                embed_count=embed_count,
-                glu_embed_count=glu_embed_count,
-                device=device
-            ) 
-            for _ in range(layer_count)
-        ])
+        self.layers: List[DecoderLayer] = nn.ModuleList(
+            [
+                DecoderLayer(
+                    head_count=attention_head_count,
+                    embed_count=embed_count,
+                    glu_embed_count=glu_embed_count,
+                    device=device,
+                )
+                for _ in range(layer_count)
+            ]
+        )
         self.layernorm_embedding = nn.LayerNorm(embed_count)
         self.final_ln = nn.LayerNorm(embed_count)
         self.lm_head = nn.Linear(embed_count, image_vocab_count + 1, bias=False)
         self.token_indices = torch.arange(IMAGE_TOKEN_COUNT, device=device)
-
 
     def forward(
         self,
@@ -152,7 +147,7 @@ class DalleBartDecoder(nn.Module):
         encoder_state: FloatTensor,
         attention_state: FloatTensor,
         prev_tokens: LongTensor,
-        token_index: LongTensor
+        token_index: LongTensor,
     ) -> Tuple[FloatTensor, FloatTensor]:
         image_count = encoder_state.shape[0] // 2
         token_index = token_index.unsqueeze(0).repeat(image_count * 2, 1)
@@ -166,12 +161,11 @@ class DalleBartDecoder(nn.Module):
                 encoder_state,
                 attention_state[i],
                 attention_mask,
-                token_index
+                token_index,
             )
         decoder_state = self.final_ln(decoder_state)
         logits = self.lm_head(decoder_state)
         return logits, attention_state
-    
 
     def sample_tokens(self, settings, **kwargs) -> Tuple[LongTensor, FloatTensor]:
         logits, attention_state = self.forward(**kwargs)
@@ -179,10 +173,10 @@ class DalleBartDecoder(nn.Module):
         temperature = settings[[0]]
         top_k = settings[[1]].to(torch.long)
         supercondition_factor = settings[[2]]
-        logits = logits[:, -1, : 2 ** 14]
+        logits = logits[:, -1, : 2**14]
         logits: FloatTensor = (
-            logits[:image_count] * (1 - supercondition_factor) + 
-            logits[image_count:] * supercondition_factor
+            logits[:image_count] * (1 - supercondition_factor)
+            + logits[image_count:] * supercondition_factor
         )
         logits_sorted, _ = logits.sort(descending=True)
         is_kept = logits >= logits_sorted[:, top_k - 1]

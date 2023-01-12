@@ -12,7 +12,7 @@ class GLU(nn.Module):
         self.fc0 = nn.Linear(count_in_out, count_middle, bias=False)
         self.fc1 = nn.Linear(count_in_out, count_middle, bias=False)
         self.fc2 = nn.Linear(count_middle, count_in_out, bias=False)
-    
+
     def forward(self, z: FloatTensor) -> FloatTensor:
         z = self.ln0.forward(z)
         w = self.fc0.forward(z)
@@ -33,30 +33,24 @@ class AttentionBase(nn.Module):
         self.v_proj = nn.Linear(embed_count, embed_count, bias=False)
         self.q_proj = nn.Linear(embed_count, embed_count, bias=False)
         self.out_proj = nn.Linear(embed_count, embed_count, bias=False)
-    
+
     def forward(
         self,
         keys: FloatTensor,
         values: FloatTensor,
         queries: FloatTensor,
-        attention_mask: BoolTensor
+        attention_mask: BoolTensor,
     ) -> FloatTensor:
         keys = keys.reshape(keys.shape[:2] + (self.head_count, -1))
         values = values.reshape(values.shape[:2] + (self.head_count, -1))
         queries = queries.reshape(queries.shape[:2] + (self.head_count, -1))
         queries /= queries.shape[-1] ** 0.5
         attention_bias = (1 - attention_mask.to(torch.float32)) * -1e12
-        attention_weights: FloatTensor = torch.einsum(
-            'bqhc,bkhc->bhqk',
-            queries, 
-            keys
-        )
+        attention_weights: FloatTensor = torch.einsum("bqhc,bkhc->bhqk", queries, keys)
         attention_weights += attention_bias
         attention_weights = torch.softmax(attention_weights, -1)
         attention_output: FloatTensor = torch.einsum(
-            "bhqk,bkhc->bqhc",
-            attention_weights, 
-            values
+            "bhqk,bkhc->bqhc", attention_weights, values
         )
         shape = attention_output.shape[:2] + (self.embed_count,)
         attention_output = attention_output.reshape(shape)
@@ -66,9 +60,7 @@ class AttentionBase(nn.Module):
 
 class EncoderSelfAttention(AttentionBase):
     def forward(
-        self,
-        encoder_state: FloatTensor,
-        attention_mask: BoolTensor
+        self, encoder_state: FloatTensor, attention_mask: BoolTensor
     ) -> FloatTensor:
         keys = self.k_proj.forward(encoder_state)
         values = self.v_proj.forward(encoder_state)
@@ -83,11 +75,9 @@ class EncoderLayer(nn.Module):
         self.self_attn = EncoderSelfAttention(head_count, embed_count)
         self.self_attn_layer_norm = nn.LayerNorm(embed_count)
         self.glu = GLU(embed_count, glu_embed_count)
-    
+
     def forward(
-        self,
-        encoder_state: FloatTensor,
-        attention_mask: BoolTensor
+        self, encoder_state: FloatTensor, attention_mask: BoolTensor
     ) -> FloatTensor:
         residual = encoder_state
         encoder_state = self.pre_self_attn_layer_norm.forward(encoder_state)
@@ -109,20 +99,22 @@ class DalleBartEncoder(nn.Module):
         text_vocab_count: int,
         text_token_count: int,
         glu_embed_count: int,
-        device: str
+        device: str,
     ):
         super().__init__()
         self.text_vocab_count = text_vocab_count
         self.embed_tokens = nn.Embedding(text_vocab_count, embed_count)
         self.embed_positions = nn.Embedding(text_token_count, embed_count)
-        self.layers: List[EncoderLayer] = nn.ModuleList([
-            EncoderLayer(
-                embed_count = embed_count,
-                head_count = attention_head_count,
-                glu_embed_count = glu_embed_count
-            ) 
-            for _ in range(layer_count)
-        ])
+        self.layers: List[EncoderLayer] = nn.ModuleList(
+            [
+                EncoderLayer(
+                    embed_count=embed_count,
+                    head_count=attention_head_count,
+                    glu_embed_count=glu_embed_count,
+                )
+                for _ in range(layer_count)
+            ]
+        )
         self.layernorm_embedding = nn.LayerNorm(embed_count)
         self.final_ln = nn.LayerNorm(embed_count)
         token_indices = torch.arange(text_token_count, device=device)
@@ -130,10 +122,9 @@ class DalleBartEncoder(nn.Module):
 
     def forward(self, text_tokens: LongTensor) -> FloatTensor:
         attention_mask = text_tokens.not_equal(1)[:, None, None, :]
-        encoder_state = (
-            self.embed_tokens.forward(text_tokens) +
-            self.embed_positions.forward(self.pose_tokens)
-        )
+        encoder_state = self.embed_tokens.forward(
+            text_tokens
+        ) + self.embed_positions.forward(self.pose_tokens)
         encoder_state = self.layernorm_embedding.forward(encoder_state)
         for layer in self.layers:
             encoder_state = layer.forward(encoder_state, attention_mask)
