@@ -161,7 +161,6 @@ class MinDalle:
         is_verbose: bool = False
     ) -> FloatTensor:
         if not self.is_reusable: del self.decoder
-        torch.cuda.empty_cache()
         if not self.is_reusable: self.init_detokenizer()
         if is_verbose: print("detokenizing image")
         images = self.detokenizer.forward(is_seamless, image_tokens)
@@ -198,35 +197,32 @@ class MinDalle:
 
         if not self.is_reusable: self.init_encoder()
         if is_verbose: print("encoding text tokens")
-        with torch.cuda.amp.autocast(dtype=self.dtype):
-            encoder_state = self.encoder.forward(text_tokens)
+        encoder_state = self.encoder.forward(text_tokens)
         if not self.is_reusable: del self.encoder
-        torch.cuda.empty_cache()
 
         if not self.is_reusable: self.init_decoder()
 
-        with torch.cuda.amp.autocast(dtype=self.dtype):
-            expanded_indices = [0] * image_count + [1] * image_count
-            text_tokens = text_tokens[expanded_indices]
-            encoder_state = encoder_state[expanded_indices]
-            attention_mask = text_tokens.not_equal(1)[:, None, None, :]
-            attention_state = torch.zeros(
-                size=(
-                    self.layer_count,
-                    image_count * 4,
-                    IMAGE_TOKEN_COUNT,
-                    self.embed_count
-                ), 
-                device=self.device
-            )
-            image_tokens = torch.full(
-                (image_count, IMAGE_TOKEN_COUNT + 1), 
-                2 ** 14 - 1,
-                dtype=torch.long,
-                device=self.device
-            )
-            
-            if seed > 0: torch.manual_seed(seed)
+        expanded_indices = [0] * image_count + [1] * image_count
+        text_tokens = text_tokens[expanded_indices]
+        encoder_state = encoder_state[expanded_indices]
+        attention_mask = text_tokens.not_equal(1)[:, None, None, :]
+        attention_state = torch.zeros(
+            size=(
+                self.layer_count,
+                image_count * 4,
+                IMAGE_TOKEN_COUNT,
+                self.embed_count
+            ),
+            device=self.device
+        )
+        image_tokens = torch.full(
+            (image_count, IMAGE_TOKEN_COUNT + 1),
+            2 ** 14 - 1,
+            dtype=torch.long,
+            device=self.device
+        )
+
+        if seed > 0: torch.manual_seed(seed)
 
         token_indices = torch.arange(IMAGE_TOKEN_COUNT, device=self.device)
         settings = torch.tensor(
@@ -235,26 +231,23 @@ class MinDalle:
             device=self.device
         )
         for i in range(IMAGE_TOKEN_COUNT):
-            torch.cuda.empty_cache()                
-            with torch.cuda.amp.autocast(dtype=self.dtype):
-                image_tokens[:, i + 1], attention_state = self.decoder.sample_tokens(
-                    settings=settings,
-                    attention_mask=attention_mask,
-                    encoder_state=encoder_state,
-                    attention_state=attention_state,
-                    # prev_tokens=image_tokens[:, :i+1],
-                    # token_index=token_indices[:i+1]
-                    prev_tokens=image_tokens[:, [i]],
-                    token_index=token_indices[[i]]
-                )
+            image_tokens[:, i + 1], attention_state = self.decoder.sample_tokens(
+                settings=settings,
+                attention_mask=attention_mask,
+                encoder_state=encoder_state,
+                attention_state=attention_state,
+                # prev_tokens=image_tokens[:, :i+1],
+                # token_index=token_indices[:i+1]
+                prev_tokens=image_tokens[:, [i]],
+                token_index=token_indices[[i]]
+            )
 
-            with torch.cuda.amp.autocast(dtype=torch.float32):
-                if ((i + 1) % 32 == 0 and progressive_outputs) or i + 1 == 256:
-                    yield self.image_grid_from_tokens(
-                        image_tokens=image_tokens[:, 1:],
-                        is_seamless=is_seamless,
-                        is_verbose=is_verbose
-                    )
+            if ((i + 1) % 32 == 0 and progressive_outputs) or i + 1 == 256:
+                yield self.image_grid_from_tokens(
+                    image_tokens=image_tokens[:, 1:],
+                    is_seamless=is_seamless,
+                    is_verbose=is_verbose
+                )
 
     def generate_image_stream(self, *args, **kwargs) -> Iterator[Image.Image]:
         image_stream = self.generate_raw_image_stream(*args, **kwargs)
