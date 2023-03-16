@@ -3,7 +3,7 @@ from PIL import Image
 import numpy
 from torch import LongTensor, FloatTensor
 import torch
-import torch.backends.cudnn, torch.backends.cuda
+import torch.backends.cuda
 import json
 import requests
 from typing import Iterator
@@ -12,8 +12,6 @@ from .models import DalleBartEncoder, DalleBartDecoder, VQGanDetokenizer
 
 torch.set_grad_enabled(False)
 torch.set_num_threads(os.cpu_count())
-torch.backends.cudnn.enabled = True
-torch.backends.cudnn.allow_tf32 = True
 
 MIN_DALLE_REPO = "https://huggingface.co/kuprel/min-dalle/resolve/main/"
 IMAGE_TOKEN_COUNT = 256
